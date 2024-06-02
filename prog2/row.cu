@@ -106,7 +106,6 @@ int main(int argc, char **argv)
 
     int numMerges = log2(k);
     int nrIteractions = log2(fileSize);
-    printf("Number of merges: %d\n", numMerges);
 
     dim3 gridSize = getBestGridSize(numMerges);
     dim3 blockSize = getBestBlockSize(numMerges);
@@ -117,12 +116,12 @@ int main(int argc, char **argv)
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
 
+    double dt = get_delta_time();
+    printf("GPU time: %f s\n", dt);
+
     validateArray<<<dim3(1, 1, 1), dim3(1, 1, 1)>>>(d_data, fileSize, sortType);
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
-
-    double dt = get_delta_time();
-    printf("GPU time: %f s\n", dt);
 
     free(data);
     CHECK(cudaFree(d_data));
@@ -138,7 +137,6 @@ __global__ static void bitonicSort(int *arr, int sortType, int N, int K)
     int idx = blockDim.x * gridDim.x * y + x;
 
     int size = N / K;
-
 
     for (int i = 0; (1 << i) < K + 1; i++)
     {
@@ -181,15 +179,16 @@ __device__ static void sort(int *arr, int sortType, int N)
         {
             for (int k = 0; k < N / (1 << j); k++)
             {
+                int kj = k * (1 << j);
                 if (k * (1 << (j - 1)) / (1 << i) % 2 == sortType)
                 {
                     for (int l = 0; l < (1 << (j - 1)); l++)
                     {
-                        if (arr[k * (1 << j) + l] > arr[k * (1 << j) + l + (1 << (j - 1))])
+                        if (arr[kj + l] > arr[kj + l + (1 << (j - 1))])
                         {
-                            int temp = arr[k * (1 << j) + l];
-                            arr[k * (1 << j) + l] = arr[k * (1 << j) + l + (1 << (j - 1))];
-                            arr[k * (1 << j) + l + (1 << (j - 1))] = temp;
+                            int temp = arr[kj + l];
+                            arr[kj + l] = arr[kj + l + (1 << (j - 1))];
+                            arr[kj + l + (1 << (j - 1))] = temp;
                         }
                     }
                 }
@@ -197,11 +196,11 @@ __device__ static void sort(int *arr, int sortType, int N)
                 {
                     for (int l = 0; l < (1 << (j - 1)); l++)
                     {
-                        if (arr[k * (1 << j) + l] < arr[k * (1 << j) + l + (1 << (j - 1))])
+                        if (arr[kj + l] < arr[kj + l + (1 << (j - 1))])
                         {
-                            int temp = arr[k * (1 << j) + l];
-                            arr[k * (1 << j) + l] = arr[k * (1 << j) + l + (1 << (j - 1))];
-                            arr[k * (1 << j) + l + (1 << (j - 1))] = temp;
+                            int temp = arr[kj + l];
+                            arr[kj + l] = arr[kj + l + (1 << (j - 1))];
+                            arr[kj + l + (1 << (j - 1))] = temp;
                         }
                     }
                 }
@@ -216,15 +215,16 @@ __device__ static void merge(int *arr, int sortType, int N)
     {
         for (int k = 0; k < N / j; k++)
         {
+            int kj = k * j;
             if (k * (j >> 1) / N % 2 == sortType)
             {
                 for (int l = 0; l < (j >> 1); l++)
                 {
-                    if (arr[k * j + l] > arr[k * j + l + (j >> 1)])
+                    if (arr[kj + l] > arr[kj + l + (j >> 1)])
                     {
-                        int temp = arr[k * j + l];
-                        arr[k * j + l] = arr[k * j + l + (j >> 1)];
-                        arr[k * j + l + (j >> 1)] = temp;
+                        int temp = arr[kj + l];
+                        arr[kj + l] = arr[kj + l + (j >> 1)];
+                        arr[kj + l + (j >> 1)] = temp;
                     }
                 }
             }
@@ -232,11 +232,11 @@ __device__ static void merge(int *arr, int sortType, int N)
             {
                 for (int l = 0; l < (j >> 1); l++)
                 {
-                    if (arr[k * j + l] < arr[k * j + l + (j >> 1)])
+                    if (arr[kj + l] < arr[kj + l + (j >> 1)])
                     {
-                        int temp = arr[k * j + l];
-                        arr[k * j + l] = arr[k * j + l + (j >> 1)];
-                        arr[k * j + l + (j >> 1)] = temp;
+                        int temp = arr[kj + l];
+                        arr[kj + l] = arr[kj + l + (j >> 1)];
+                        arr[kj + l + (j >> 1)] = temp;
                     }
                 }
             }
