@@ -19,16 +19,12 @@
 #include "common.h"
 #include "cuda_runtime.h"
 
-__global__ static void global_sort(int *arr, int direction, int N, int K, int iteration);
-__device__ static void device_sort(int *arr, int idx, int N, int direction);
-__device__ static void device_merge(int *arr, int idx, int N, int direction);
+__global__ static void bitonicSort(int *arr, int direction, int N, int K, int iteration);
+__global__ static void validateArray(int *array, int size, int sortType);
+
 static dim3 getBestGridSize(int iteration);
 static dim3 getBestBlockSize(int iteration);
 static double get_delta_time(void);
-__device__ static void swap(int *a, int *b, int sortType);
-__device__ static void merge(int *array, int size, int sortType);
-__device__ static void sort(int *array, int size, int sortType);
-__device__ static void validateArray(int *array, int size, int sortType);
 
 int main(int argc, char **argv)
 {
@@ -107,21 +103,23 @@ int main(int argc, char **argv)
     CHECK(cudaMemcpy(d_data, data, matrixSize * sizeof(int), cudaMemcpyHostToDevice));
 
     int numMerges = log2(k);
-    
+
     dim3 gridSize = getBestGridSize(numMerges);
     dim3 blockSize = getBestBlockSize(numMerges);
 
     (void)get_delta_time();
 
-    int i;
-    for (i = 0; i < numMerges + 1; i++)
+    
+    bitonicSort<<<gridSize, blockSize>>>(d_data, 1, matrixSize, k, 0);
+    CHECK(cudaDeviceSynchronize());
+    /*int i;
+    for (i = 0; i < numMerges; i++)
     {
-        printf("Iteration: %d\n", i);
-        global_sort<<<gridSize, blockSize>>>(d_data, sortType, fileSize, k, i);
+        bitonicMerge<<<gridSize, blockSize>>>(d_data, 1, matrixSize, k, i + 1);
         CHECK(cudaDeviceSynchronize());
-    }
-    printf("Last iteration\n");
-    global_sort<<<gridSize, blockSize>>>(d_data, sortType, fileSize, k, -1);
+        CHECK(cudaGetLastError());
+    }*/
+    validateArray<<<dim3(1, 1, 1), dim3(1, 1, 1)>>>(d_data, fileSize, sortType);
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
 
@@ -135,179 +133,26 @@ int main(int argc, char **argv)
     return EXIT_SUCCESS;
 }
 
-__global__ static void global_sort(int *arr, int direction, int N, int K, int iteration)
+__global__ static void bitonicSort(int *arr, int direction, int N, int K, int iteration)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
     int y = threadIdx.y + blockDim.y * blockIdx.y;
     int idx = blockDim.x * gridDim.x * y + x;
 
-    if (idx * (1 << iteration) * N/K >= N)
+    if (idx * (1 << iteration) * N / K >= N)
     {
         return;
     }
 
-    if (iteration == 0)
+    for (int i = 0; i < N/K; i = i + 2)
     {
-        device_sort(arr, idx * N/K, N/K, idx % 2 == direction);
-    }
-    else if (iteration == -1)
-    {
-        if (idx == 0)
+        if (arr[idx * (1 << iteration) * N / K + i] > arr[idx * (1 << iteration) * N / K + i + 1] == (direction == i / 2 % 2))
         {
-            validateArray(arr, N, direction);
+            int temp = arr[idx * (1 << iteration) * N / K + i];
+            arr[idx * (1 << iteration) * N / K + i] = arr[idx * (1 << iteration) * N / K + i + 1];
+            arr[idx * (1 << iteration) * N / K + i + 1] = temp;
         }
-        return;
-    }
-    else
-    {
-        device_merge(arr, idx * (1 << iteration) * N/K, (1 << iteration) * N/K, idx % 2 == direction);
-    }
-    printf("From %d to %d\n", idx * (1 << iteration) * N/K, idx * (1 << iteration) * N/K + (1 << iteration) * N/K);
-}
-
-__device__ static void device_sort(int *arr, int idx, int N, int direction)
-{
-    sort(arr + idx, N, direction);
-}
-
-__device__ static void device_merge(int *arr, int idx, int N, int direction)
-{
-    merge(arr + idx, N, direction);
-}
-
-dim3 gridOptions[21] = {
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 1, 1 << 0, 1 << 0),
-    dim3(1 << 2, 1 << 0, 1 << 0),
-    dim3(1 << 3, 1 << 0, 1 << 0),
-    dim3(1 << 4, 1 << 0, 1 << 0),
-    dim3(1 << 5, 1 << 0, 1 << 0),
-    dim3(1 << 6, 1 << 0, 1 << 0),
-    dim3(1 << 7, 1 << 0, 1 << 0),
-    dim3(1 << 8, 1 << 0, 1 << 0),
-    dim3(1 << 9, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-};
-
-dim3 blockOptions[21] = {
-    dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 1, 1 << 0, 1 << 0),
-    dim3(1 << 2, 1 << 0, 1 << 0),
-    dim3(1 << 3, 1 << 0, 1 << 0),
-    dim3(1 << 4, 1 << 0, 1 << 0),
-    dim3(1 << 5, 1 << 0, 1 << 0),
-    dim3(1 << 6, 1 << 0, 1 << 0),
-    dim3(1 << 7, 1 << 0, 1 << 0),
-    dim3(1 << 8, 1 << 0, 1 << 0),
-    dim3(1 << 9, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-};
-
-dim3 getBestGridSize(int iteration)
-{
-    return gridOptions[iteration];
-}
-
-dim3 getBestBlockSize(int iteration)
-{
-    return blockOptions[iteration];
-};
-
-static double get_delta_time(void)
-{
-    static struct timespec t0, t1;
-
-    t0 = t1;
-    if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0)
-    {
-        perror("clock_gettime");
-        exit(1);
-    }
-    return (double)(t1.tv_sec - t0.tv_sec) + 1.0e-9 * (double)(t1.tv_nsec - t0.tv_nsec);
-}
-
-/**
- *  \brief Function swap.
- *
- *  Its role is to swap two elements of an integer array.
- *
- *  \param a pointer to the first element
- *  \param b pointer to the second element
- *  \param sortType sort type
- */
-
-__device__ static void swap(int *a, int *b, int sortType)
-{
-    if (sortType == (*a > *b))
-    {
-        int temp = *a;
-        *a = *b;
-        *b = temp;
-    }
-}
-
-/**
- *  \brief Function merge.
- *
- *  Its role is to merge two integer arrays.
- *
- *  \param array pointer to the array
- *  \param size array size
- *  \param sortType sort type
- */
-
-__device__ static void merge(int *array, int size, int sortType)
-{
-    if (size > 1)
-    {
-        int i;
-        int half = size / 2;
-        for (i = 0; i < half; i++)
-        {
-            swap(&array[i], &array[i + half], sortType);
-        }
-        merge(array, half, sortType);
-        merge(array + half, size - half, sortType);
-    }
-}
-
-/**
- *  \brief Function sort.
- *
- *  Its role is to sort an integer array.
- *
- *  \param array pointer to the array
- *  \param size array size
- *  \param sortType sort type
- */
-
-__device__ static void sort(int *array, int size, int sortType)
-{
-    if (size > 1)
-    {
-        int half = size / 2;
-        sort(array, half, 1);
-        sort(array + half, size - half, 0);
-        merge(array, size, sortType);
+        merge(arr, direction, N, K, iteration, idx);
     }
 }
 
@@ -320,7 +165,7 @@ __device__ static void sort(int *array, int size, int sortType)
  *  \param size array size
  *  \param sortType sort type
  */
-__device__ static void validateArray(int *array, int size, int sortType)
+__global__ static void validateArray(int *array, int size, int sortType)
 {
     int j;
     for (j = 0; j < size - 1; j++)
@@ -339,4 +184,74 @@ __device__ static void validateArray(int *array, int size, int sortType)
     {
         printf("Something went wrong!\n");
     }
+};
+
+static dim3 gridOptions[21] = {
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 1, 1 << 0, 1 << 0),
+    dim3(1 << 2, 1 << 0, 1 << 0),
+    dim3(1 << 3, 1 << 0, 1 << 0),
+    dim3(1 << 4, 1 << 0, 1 << 0),
+    dim3(1 << 5, 1 << 0, 1 << 0),
+    dim3(1 << 6, 1 << 0, 1 << 0),
+    dim3(1 << 7, 1 << 0, 1 << 0),
+    dim3(1 << 8, 1 << 0, 1 << 0),
+    dim3(1 << 9, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+};
+
+static dim3 blockOptions[21] = {
+    dim3(1 << 0, 1 << 0, 1 << 0),
+    dim3(1 << 1, 1 << 0, 1 << 0),
+    dim3(1 << 2, 1 << 0, 1 << 0),
+    dim3(1 << 3, 1 << 0, 1 << 0),
+    dim3(1 << 4, 1 << 0, 1 << 0),
+    dim3(1 << 5, 1 << 0, 1 << 0),
+    dim3(1 << 6, 1 << 0, 1 << 0),
+    dim3(1 << 7, 1 << 0, 1 << 0),
+    dim3(1 << 8, 1 << 0, 1 << 0),
+    dim3(1 << 9, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+    dim3(1 << 10, 1 << 0, 1 << 0),
+};
+
+static dim3 getBestGridSize(int iteration)
+{
+    return gridOptions[iteration];
+};
+
+static dim3 getBestBlockSize(int iteration)
+{
+    return blockOptions[iteration];
+};
+
+static double get_delta_time(void)
+{
+    static struct timespec t0, t1;
+
+    t0 = t1;
+    if (clock_gettime(CLOCK_MONOTONIC, &t1) != 0)
+    {
+        perror("clock_gettime");
+        exit(1);
+    }
+    return (double)(t1.tv_sec - t0.tv_sec) + 1.0e-9 * (double)(t1.tv_nsec - t0.tv_nsec);
 }
