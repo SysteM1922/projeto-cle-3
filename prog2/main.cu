@@ -19,9 +19,10 @@
 #include "common.h"
 #include "cuda_runtime.h"
 
-__global__ static void bitonicSort(int *arr, int direction, int N, int K, int iteration, int nrIteractions);
+__global__ static void bitonicSort(int *arr, int direction, int N, int K);
 __global__ static void validateArray(int *array, int size, int sortType);
-
+__device__ static void sort(int *arr, int sortType, int N);
+__device__ static void merge(int *arr, int sortType, int N);
 
 static dim3 getBestGridSize(int iteration);
 static dim3 getBestBlockSize(int iteration);
@@ -105,13 +106,14 @@ int main(int argc, char **argv)
 
     int numMerges = log2(k);
     int nrIteractions = log2(fileSize);
+    printf("Number of merges: %d\n", numMerges);
 
     dim3 gridSize = getBestGridSize(numMerges);
     dim3 blockSize = getBestBlockSize(numMerges);
 
     (void)get_delta_time();
 
-    bitonicSort<<<gridSize, blockSize>>>(d_data, sortType, matrixSize, k, 0, nrIteractions);
+    bitonicSort<<<gridSize, blockSize>>>(d_data, sortType, fileSize, k);
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
 
@@ -129,44 +131,77 @@ int main(int argc, char **argv)
     return EXIT_SUCCESS;
 }
 
-__global__ static void bitonicSort(int *arr, int sortType, int N, int K, int iteration, int nrIteractions)
+__global__ static void bitonicSort(int *arr, int sortType, int N, int K)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
     int y = threadIdx.y + blockDim.y * blockIdx.y;
     int idx = blockDim.x * gridDim.x * y + x;
 
+    int size = N / K;
 
-    if (idx * (1 << iteration) * N / K >= N)
+
+    for (int i = 0; (1 << i) < K + 1; i++)
     {
-        return;
+        if (idx * (1 << i) * N / K >= N)
+        {
+            return;
+        }
+        if (i == 0)
+        {
+            if (idx % 2 == 0)
+            {
+                sort(arr + idx * (1 << i) * N / K, sortType, size);
+            }
+            else
+            {
+                sort(arr + idx * (1 << i) * N / K, !sortType, size);
+            }
+        }
+        else
+        {
+            if (idx % 2 == 0)
+            {
+                merge(arr + idx * (1 << i) * N / K, sortType, size);
+            }
+            else
+            {
+                merge(arr + idx * (1 << i) * N / K, !sortType, size);
+            }
+        }
+        size <<= 1;
+        __syncthreads();
     }
+}
 
-    for (int i = 0; i < nrIteractions; i++)
+__device__ static void sort(int *arr, int sortType, int N)
+{
+    for (int i = 0; (1 << i) < N; i++)
     {
         for (int j = i + 1; j > 0; j--)
         {
-            for (int k = 0; k < (1 << nrIteractions)/(1<<j); k++)
+            for (int k = 0; k < N / (1 << j); k++)
             {
-                if (k * (1<<(j-1)) / (1<<i) % 2 == sortType)
+                if (k * (1 << (j - 1)) / (1 << i) % 2 == sortType)
                 {
-                    for (int l = 0; l < (1<<(j-1)); l++)
+                    for (int l = 0; l < (1 << (j - 1)); l++)
                     {
-                        if (arr[k * (1<<j) + l] > arr[k * (1<<j) + l + (1<<(j-1))])
+                        if (arr[k * (1 << j) + l] > arr[k * (1 << j) + l + (1 << (j - 1))])
                         {
-                            int temp = arr[k * (1<<j) + l];
-                            arr[k * (1<<j) + l] = arr[k * (1<<j) + l + (1<<(j-1))];
-                            arr[k * (1<<j) + l + (1<<(j-1))] = temp;
+                            int temp = arr[k * (1 << j) + l];
+                            arr[k * (1 << j) + l] = arr[k * (1 << j) + l + (1 << (j - 1))];
+                            arr[k * (1 << j) + l + (1 << (j - 1))] = temp;
                         }
                     }
                 }
-                else {
-                    for (int l = 0; l < (1<<(j-1)); l++)
+                else
+                {
+                    for (int l = 0; l < (1 << (j - 1)); l++)
                     {
-                        if (arr[k * (1<<j) + l] < arr[k * (1<<j) + l + (1<<(j-1))])
+                        if (arr[k * (1 << j) + l] < arr[k * (1 << j) + l + (1 << (j - 1))])
                         {
-                            int temp = arr[k * (1<<j) + l];
-                            arr[k * (1<<j) + l] = arr[k * (1<<j) + l + (1<<(j-1))];
-                            arr[k * (1<<j) + l + (1<<(j-1))] = temp;
+                            int temp = arr[k * (1 << j) + l];
+                            arr[k * (1 << j) + l] = arr[k * (1 << j) + l + (1 << (j - 1))];
+                            arr[k * (1 << j) + l + (1 << (j - 1))] = temp;
                         }
                     }
                 }
@@ -175,12 +210,38 @@ __global__ static void bitonicSort(int *arr, int sortType, int N, int K, int ite
     }
 }
 
-__device__ static void sort(){
-
-}
-
-__device__ static void merge(){
-
+__device__ static void merge(int *arr, int sortType, int N)
+{
+    for (int j = N; j > 0; j >>= 1)
+    {
+        for (int k = 0; k < N / j; k++)
+        {
+            if (k * (j >> 1) / N % 2 == sortType)
+            {
+                for (int l = 0; l < (j >> 1); l++)
+                {
+                    if (arr[k * j + l] > arr[k * j + l + (j >> 1)])
+                    {
+                        int temp = arr[k * j + l];
+                        arr[k * j + l] = arr[k * j + l + (j >> 1)];
+                        arr[k * j + l + (j >> 1)] = temp;
+                    }
+                }
+            }
+            else
+            {
+                for (int l = 0; l < (j >> 1); l++)
+                {
+                    if (arr[k * j + l] < arr[k * j + l + (j >> 1)])
+                    {
+                        int temp = arr[k * j + l];
+                        arr[k * j + l] = arr[k * j + l + (j >> 1)];
+                        arr[k * j + l + (j >> 1)] = temp;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /**
@@ -213,7 +274,7 @@ __global__ static void validateArray(int *array, int size, int sortType)
     }
 };
 
-static dim3 gridOptions[21] = {
+static dim3 gridOptions[11] = {
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 0, 1 << 0, 1 << 0),
@@ -225,19 +286,9 @@ static dim3 gridOptions[21] = {
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 0, 1 << 0, 1 << 0),
-    dim3(1 << 1, 1 << 0, 1 << 0),
-    dim3(1 << 2, 1 << 0, 1 << 0),
-    dim3(1 << 3, 1 << 0, 1 << 0),
-    dim3(1 << 4, 1 << 0, 1 << 0),
-    dim3(1 << 5, 1 << 0, 1 << 0),
-    dim3(1 << 6, 1 << 0, 1 << 0),
-    dim3(1 << 7, 1 << 0, 1 << 0),
-    dim3(1 << 8, 1 << 0, 1 << 0),
-    dim3(1 << 9, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
 };
 
-static dim3 blockOptions[21] = {
+static dim3 blockOptions[11] = {
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 1, 1 << 0, 1 << 0),
     dim3(1 << 2, 1 << 0, 1 << 0),
@@ -248,15 +299,6 @@ static dim3 blockOptions[21] = {
     dim3(1 << 7, 1 << 0, 1 << 0),
     dim3(1 << 8, 1 << 0, 1 << 0),
     dim3(1 << 9, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
-    dim3(1 << 10, 1 << 0, 1 << 0),
     dim3(1 << 10, 1 << 0, 1 << 0),
 };
 
