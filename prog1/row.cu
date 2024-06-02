@@ -85,7 +85,6 @@ int main(int argc, char **argv)
         printf("Error: Could not read file size\n");
         exit(EXIT_FAILURE);
     }
-    printf("File size: %d\n", fileSize);
     int *data = (int *)malloc(matrixSize * sizeof(int));
     if (data == NULL)
     {
@@ -173,34 +172,33 @@ __global__ static void bitonicSort(int *arr, int sortType, int N, int K)
 
 __device__ static void sort(int *arr, int sortType, int N)
 {
-    for (int i = 0; (1 << i) < N; i++)
+    for (int i = 1; i < N; i <<= 1)
     {
-        for (int j = i + 1; j > 0; j--)
+        for (int j = i; j > 0; j >>= 1)
         {
-            for (int k = 0; k < N / (1 << j); k++)
+            for (int k = 0; k < N; k += (j << 1))
             {
-                int kj = k * (1 << j);
-                if (k * (1 << (j - 1)) / (1 << i) % 2 == sortType)
+                if (((k >> 1) / i & 1) == sortType)     // if ((k / (1 << i) % 2) == sortType)
                 {
-                    for (int l = 0; l < (1 << (j - 1)); l++)
+                    for (int l = k; l < j + k; l++)
                     {
-                        if (arr[kj + l] > arr[kj + l + (1 << (j - 1))])
+                        if (arr[l] > arr[l + j])
                         {
-                            int temp = arr[kj + l];
-                            arr[kj + l] = arr[kj + l + (1 << (j - 1))];
-                            arr[kj + l + (1 << (j - 1))] = temp;
+                            int temp = arr[l];
+                            arr[l] = arr[l + j];
+                            arr[l + j] = temp;
                         }
                     }
                 }
                 else
                 {
-                    for (int l = 0; l < (1 << (j - 1)); l++)
+                    for (int l = k; l < j + k; l++)
                     {
-                        if (arr[kj + l] < arr[kj + l + (1 << (j - 1))])
+                        if (arr[l] < arr[l + j])
                         {
-                            int temp = arr[kj + l];
-                            arr[kj + l] = arr[kj + l + (1 << (j - 1))];
-                            arr[kj + l + (1 << (j - 1))] = temp;
+                            int temp = arr[l];
+                            arr[l] = arr[l + j];
+                            arr[l + j] = temp;
                         }
                     }
                 }
@@ -211,33 +209,17 @@ __device__ static void sort(int *arr, int sortType, int N)
 
 __device__ static void merge(int *arr, int sortType, int N)
 {
-    for (int j = N; j > 0; j >>= 1)
+    for (int j = N >> 1; j > 0; j >>= 1)
     {
-        for (int k = 0; k < N / j; k++)
+        for (int k = 0; k < N; k += (j << 1))
         {
-            int kj = k * j;
-            if (k * (j >> 1) / N % 2 == sortType)
+            for (int l = k; l < j + k; l++)
             {
-                for (int l = 0; l < (j >> 1); l++)
+                if (arr[l] > arr[l + j] ^ sortType)
                 {
-                    if (arr[kj + l] > arr[kj + l + (j >> 1)])
-                    {
-                        int temp = arr[kj + l];
-                        arr[kj + l] = arr[kj + l + (j >> 1)];
-                        arr[kj + l + (j >> 1)] = temp;
-                    }
-                }
-            }
-            else
-            {
-                for (int l = 0; l < (j >> 1); l++)
-                {
-                    if (arr[kj + l] < arr[kj + l + (j >> 1)])
-                    {
-                        int temp = arr[kj + l];
-                        arr[kj + l] = arr[kj + l + (j >> 1)];
-                        arr[kj + l + (j >> 1)] = temp;
-                    }
+                    int temp = arr[l];
+                    arr[l] = arr[l + j];
+                    arr[l + j] = temp;
                 }
             }
         }
