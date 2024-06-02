@@ -19,8 +19,9 @@
 #include "common.h"
 #include "cuda_runtime.h"
 
-__global__ static void bitonicSort(int *arr, int direction, int N, int K, int iteration);
+__global__ static void bitonicSort(int *arr, int direction, int N, int K, int iteration, int nrIteractions);
 __global__ static void validateArray(int *array, int size, int sortType);
+
 
 static dim3 getBestGridSize(int iteration);
 static dim3 getBestBlockSize(int iteration);
@@ -103,22 +104,17 @@ int main(int argc, char **argv)
     CHECK(cudaMemcpy(d_data, data, matrixSize * sizeof(int), cudaMemcpyHostToDevice));
 
     int numMerges = log2(k);
+    int nrIteractions = log2(fileSize);
 
     dim3 gridSize = getBestGridSize(numMerges);
     dim3 blockSize = getBestBlockSize(numMerges);
 
     (void)get_delta_time();
 
-    
-    bitonicSort<<<gridSize, blockSize>>>(d_data, 1, matrixSize, k, 0);
+    bitonicSort<<<gridSize, blockSize>>>(d_data, sortType, matrixSize, k, 0, nrIteractions);
     CHECK(cudaDeviceSynchronize());
-    /*int i;
-    for (i = 0; i < numMerges; i++)
-    {
-        bitonicMerge<<<gridSize, blockSize>>>(d_data, 1, matrixSize, k, i + 1);
-        CHECK(cudaDeviceSynchronize());
-        CHECK(cudaGetLastError());
-    }*/
+    CHECK(cudaGetLastError());
+
     validateArray<<<dim3(1, 1, 1), dim3(1, 1, 1)>>>(d_data, fileSize, sortType);
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
@@ -133,27 +129,58 @@ int main(int argc, char **argv)
     return EXIT_SUCCESS;
 }
 
-__global__ static void bitonicSort(int *arr, int direction, int N, int K, int iteration)
+__global__ static void bitonicSort(int *arr, int sortType, int N, int K, int iteration, int nrIteractions)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
     int y = threadIdx.y + blockDim.y * blockIdx.y;
     int idx = blockDim.x * gridDim.x * y + x;
+
 
     if (idx * (1 << iteration) * N / K >= N)
     {
         return;
     }
 
-    for (int i = 0; i < N/K; i = i + 2)
+    for (int i = 0; i < nrIteractions; i++)
     {
-        if (arr[idx * (1 << iteration) * N / K + i] > arr[idx * (1 << iteration) * N / K + i + 1] == (direction == i / 2 % 2))
+        for (int j = i + 1; j > 0; j--)
         {
-            int temp = arr[idx * (1 << iteration) * N / K + i];
-            arr[idx * (1 << iteration) * N / K + i] = arr[idx * (1 << iteration) * N / K + i + 1];
-            arr[idx * (1 << iteration) * N / K + i + 1] = temp;
+            for (int k = 0; k < (1 << nrIteractions)/(1<<j); k++)
+            {
+                if (k * (1<<(j-1)) / (1<<i) % 2 == sortType)
+                {
+                    for (int l = 0; l < (1<<(j-1)); l++)
+                    {
+                        if (arr[k * (1<<j) + l] > arr[k * (1<<j) + l + (1<<(j-1))])
+                        {
+                            int temp = arr[k * (1<<j) + l];
+                            arr[k * (1<<j) + l] = arr[k * (1<<j) + l + (1<<(j-1))];
+                            arr[k * (1<<j) + l + (1<<(j-1))] = temp;
+                        }
+                    }
+                }
+                else {
+                    for (int l = 0; l < (1<<(j-1)); l++)
+                    {
+                        if (arr[k * (1<<j) + l] < arr[k * (1<<j) + l + (1<<(j-1))])
+                        {
+                            int temp = arr[k * (1<<j) + l];
+                            arr[k * (1<<j) + l] = arr[k * (1<<j) + l + (1<<(j-1))];
+                            arr[k * (1<<j) + l + (1<<(j-1))] = temp;
+                        }
+                    }
+                }
+            }
         }
-        merge(arr, direction, N, K, iteration, idx);
     }
+}
+
+__device__ static void sort(){
+
+}
+
+__device__ static void merge(){
+
 }
 
 /**
