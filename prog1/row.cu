@@ -83,7 +83,7 @@ int main(int argc, char **argv)
     }
 
     /* read file */
-    int fileSize;
+    int fileSize; /* file size */
     FILE *file = fopen(fileName, "rb"); /* open file */
 
     if (file == NULL) /* check if file is null */
@@ -110,7 +110,7 @@ int main(int argc, char **argv)
     fclose(file); /* close file */
 
     /* reserve memory for the gpu */
-    int *d_data;
+    int *d_data; /* device data */
     CHECK(cudaMalloc((void **)&d_data, matrixSize * sizeof(int))); /* allocate memory for d_data */
     CHECK(cudaMemcpy(d_data, data, matrixSize * sizeof(int), cudaMemcpyHostToDevice)); /* copy data to d_data */
 
