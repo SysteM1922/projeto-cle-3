@@ -19,10 +19,10 @@
 #include "common.h"
 #include "cuda_runtime.h"
 
-__global__ static void bitonicSort(int *arr, int direction, int N, int K);
-__global__ static void validateArray(int *array, int sortType, int N);
-__device__ static void sort(int *arr, int sortType, int N);
-__device__ static void merge(int *arr, int sortType, int N);
+__global__ static void bitonicSort(int *arr, int direction, int N, int K, int colsize);
+__global__ static void validateArray(int *array, int sortType, int N, int K);
+__device__ static void sort(int *arr, int start, int sortType, int N, int K);
+__device__ static void merge(int *arr, int start, int sortType, int N, int K);
 
 static dim3 getBestGridSize(int iteration);
 static dim3 getBestBlockSize(int iteration);
@@ -39,21 +39,26 @@ int main(int argc, char **argv)
     CHECK(cudaSetDevice(dev));
 
     /* parse command line */
-    if (argc < 3)
+    if (argc < 5)
     {
-        printf("Usage: %s -f <file>\n", argv[0]);
+        printf("Usage: %s -f <file> -k <number_subsequences>\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
     char *fileName = NULL;
     int opt, sortType = 0;
-    int matrixSize = 1024 * 1024;
-    int K = 1024;
+    int K;
+    int colsize = 1024;
+    int rowsize = 1024;
+    int matrixSize = colsize * rowsize;
 
-    while ((opt = getopt(argc, argv, "s:f:h")) != -1)
+    while ((opt = getopt(argc, argv, "k:s:f:h")) != -1)
     {
         switch (opt)
         {
+        case 'k': /* number of subsequences */
+            K = atoi(optarg);
+            break;
         case 's': /* sort type */
             sortType = atoi(optarg);
             break;
@@ -61,10 +66,10 @@ int main(int argc, char **argv)
             fileName = optarg;
             break;
         case 'h': /* help */
-            printf("Usage: %s -s <sort_type> -f <file>\n", argv[0]);
+            printf("Usage: %s -s <sort_type> -f <file> -k <number_subsequences>\n", argv[0]);
             exit(EXIT_SUCCESS);
         default:
-            printf("Usage: %s -s <sort_type> -f <file>\n", argv[0]);
+            printf("Usage: %s -s <sort_type> -f <file> -k <number_subsequences>\n", argv[0]);
             exit(EXIT_FAILURE);
         }
     }
@@ -102,21 +107,20 @@ int main(int argc, char **argv)
     CHECK(cudaMemcpy(d_data, data, matrixSize * sizeof(int), cudaMemcpyHostToDevice));
 
     int numMerges = log2(K);
-    int nrIteractions = log2(fileSize);
 
     dim3 gridSize = getBestGridSize(numMerges);
     dim3 blockSize = getBestBlockSize(numMerges);
 
     (void)get_delta_time();
 
-    bitonicSort<<<gridSize, blockSize>>>(d_data, sortType, fileSize, K);
+    bitonicSort<<<gridSize, blockSize>>>(d_data, sortType, matrixSize, K, colsize);
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
 
     double dt = get_delta_time();
     printf("GPU time: %f s\n", dt);
 
-    validateArray<<<dim3(1, 1, 1), dim3(1, 1, 1)>>>(d_data, sortType, fileSize);
+    validateArray<<<dim3(1, 1, 1), dim3(1, 1, 1)>>>(d_data, sortType, matrixSize, colsize);
     CHECK(cudaDeviceSynchronize());
     CHECK(cudaGetLastError());
 
@@ -127,13 +131,13 @@ int main(int argc, char **argv)
     return EXIT_SUCCESS;
 }
 
-__global__ static void bitonicSort(int *arr, int sortType, int N, int K)
+__global__ static void bitonicSort(int *arr, int sortType, int N, int K, int colsize)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
     int y = threadIdx.y + blockDim.y * blockIdx.y;
     int idx = blockDim.x * gridDim.x * y + x;
 
-    int row_size = N / K;
+    int size = N / K;
 
     for (int i = 0; (1 << i) < K + 1; i++)
     {
@@ -145,67 +149,40 @@ __global__ static void bitonicSort(int *arr, int sortType, int N, int K)
         {
             if (idx % 2 == 0)
             {
-                sort(arr + idx * (1 << i) * N / K, sortType, row_size);
+                sort(arr, idx * (1 << i) * N / K, sortType, size, colsize);
             }
             else
             {
-                sort(arr + idx * (1 << i) * N / K, !sortType, row_size);
+                sort(arr, idx * (1 << i) * N / K, !sortType, size, colsize);
             }
         }
         else
         {
             if (idx % 2 == 0)
             {
-                merge(arr + idx * (1 << i) * N / K, sortType, row_size);
+                merge(arr, idx * (1 << i) * N / K, sortType, size, colsize);
             }
             else
             {
-                merge(arr + idx * (1 << i) * N / K, !sortType, row_size);
+                merge(arr, idx * (1 << i) * N / K, !sortType, size, colsize);
             }
         }
-        row_size <<= 1;
+        size <<= 1;
         __syncthreads();
     }
 }
 
-__device__ static void sort(int *arr, int sortType, int N)
-{
-    for (int i = 1; i < N; i <<= 1)
+__device__ static void sort(int *arr, int start, int sortType, int N, int K)
+{   
+    for (int i = 2; i <= N; i <<= 1)
     {
-        for (int j = i; j > 0; j >>= 1)
-        {
-            for (int k = 0; k < N; k += (j << 1))
-            {
-                if (((k >> 1) / i & 1) == sortType)     // if ((k / (1 << i) % 2) == sortType)
-                {
-                    for (int l = k; l < j + k; l++)
-                    {
-                        if (arr[l] > arr[l + j])
-                        {
-                            int temp = arr[l];
-                            arr[l] = arr[l + j];
-                            arr[l + j] = temp;
-                        }
-                    }
-                }
-                else
-                {
-                    for (int l = k; l < j + k; l++)
-                    {
-                        if (arr[l] < arr[l + j])
-                        {
-                            int temp = arr[l];
-                            arr[l] = arr[l + j];
-                            arr[l + j] = temp;
-                        }
-                    }
-                }
-            }
+        for (int j = 0; j < N; j += i) {
+            merge(arr, start + j, ((j / i % 2 != 0) ^ sortType), i, K);
         }
     }
 }
 
-__device__ static void merge(int *arr, int sortType, int N)
+__device__ static void merge(int *arr, int start, int sortType, int N, int K)
 {
     for (int j = N >> 1; j > 0; j >>= 1)
     {
@@ -213,11 +190,13 @@ __device__ static void merge(int *arr, int sortType, int N)
         {
             for (int l = k; l < j + k; l++)
             {
-                if (arr[l] > arr[l + j] ^ sortType)
+                int first = K * ((start + l) % K) + (start + l) / K;
+                int second = K * ((start + l + j) % K) + (start + l + j) / K;
+                if (arr[first] > arr[second] ^ sortType)
                 {
-                    int temp = arr[l];
-                    arr[l] = arr[l + j];
-                    arr[l + j] = temp;
+                    int temp = arr[first];
+                    arr[first] = arr[second];
+                    arr[second] = temp;
                 }
             }
         }
@@ -233,18 +212,21 @@ __device__ static void merge(int *arr, int sortType, int N)
  *  \param size array size
  *  \param sortType sort type
  */
-__global__ static void validateArray(int *array, int sortType, int N)
+__global__ static void validateArray(int *array, int sortType, int N, int K)
 {
+    int actual_element, last_element = array[0];
     int i;
-    for (i = 0; i < N - 1; i++)
+    for (i = 0; i < N; i++)
     {
-        if (sortType == (array[i] < array[i + 1]) && array[i] != array[i + 1])
+        actual_element = array[K * (i % K) + i / K];
+        if ((last_element > actual_element ^ sortType) && last_element != actual_element)
         {
-            printf("Error in position %d between element %d and %d\n", i, array[i], array[i + 1]);
+            printf("Error in position %d between element %d and %d\n", i, last_element, actual_element);
             break;
         }
+        last_element = actual_element;
     }
-    if (i == (N - 1))
+    if (i == N)
     {
         printf("Everything is OK!\n");
     }
