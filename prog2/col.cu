@@ -1,7 +1,7 @@
 /**
- * \file row.cu
+ * \file col.cu
  *
- * \brief Row module.
+ * \brief Cow module.
  *
  * This module provides the program's logic.
  *
@@ -28,6 +28,14 @@ static dim3 getBestGridSize(int iteration);
 static dim3 getBestBlockSize(int iteration);
 static double get_delta_time(void);
 
+/**
+ * \brief Main function.
+ *
+ * \param argc number of arguments
+ * \param argv arguments
+ *
+ * \return exit status
+ */
 int main(int argc, char **argv)
 {
     /* set up the device */
@@ -131,6 +139,17 @@ int main(int argc, char **argv)
     return EXIT_SUCCESS;
 }
 
+/**
+ * \brief Function bitonicSort.
+ *
+ * Its role is to sort an integer array using the bitonic sort algorithm.
+ *
+ * \param arr array
+ * \param sortType sort type
+ * \param N number of elements
+ * \param K number of subsequences
+ * \param rowsize row size
+ */
 __global__ static void bitonicSort(int *arr, int sortType, int N, int K, int colsize)
 {
     int x = threadIdx.x + blockDim.x * blockIdx.x;
@@ -172,6 +191,17 @@ __global__ static void bitonicSort(int *arr, int sortType, int N, int K, int col
     }
 }
 
+/**
+ * \brief Function sort.
+ *
+ * Its role is to sort an integer array.
+ *
+ * \param arr array
+ * \param start start index
+ * \param sortType sort type
+ * \param N number of elements
+ * \param K col size
+ */
 __device__ static void sort(int *arr, int start, int sortType, int N, int K)
 {   
     for (int i = 2; i <= N; i <<= 1)
@@ -182,6 +212,18 @@ __device__ static void sort(int *arr, int start, int sortType, int N, int K)
     }
 }
 
+
+/**
+ * \brief Function merge.
+ *
+ * Its role is to merge two subsequences.
+ *
+ * \param arr array
+ * \param start start index
+ * \param sortType sort type
+ * \param N number of elements
+ * \param K col size
+ */
 __device__ static void merge(int *arr, int start, int sortType, int N, int K)
 {
     for (int j = N >> 1; j > 0; j >>= 1)
@@ -236,6 +278,9 @@ __global__ static void validateArray(int *array, int sortType, int N, int K)
     }
 };
 
+/**
+ * \brief Grid options.
+ */
 static dim3 gridOptions[11] = {
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 0, 1 << 0, 1 << 0),
@@ -250,6 +295,9 @@ static dim3 gridOptions[11] = {
     dim3(1 << 0, 1 << 0, 1 << 0),
 };
 
+/**
+ * \brief Block options.
+ */
 static dim3 blockOptions[11] = {
     dim3(1 << 0, 1 << 0, 1 << 0),
     dim3(1 << 1, 1 << 0, 1 << 0),
@@ -264,11 +312,25 @@ static dim3 blockOptions[11] = {
     dim3(1 << 10, 1 << 0, 1 << 0),
 };
 
+/**
+ * \brief Get the best grid size for the given iteration.
+ *
+ * \param iteration iteration
+ *
+ * \return best grid size
+ */
 static dim3 getBestGridSize(int iteration)
 {
     return gridOptions[iteration];
 };
 
+/**
+ * \brief Get the best block size for the given iteration.
+ *
+ * \param iteration iteration
+ *
+ * \return best block size
+ */
 static dim3 getBestBlockSize(int iteration)
 {
     return blockOptions[iteration];
